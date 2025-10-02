@@ -16,15 +16,22 @@ public class GridOverlay : MonoBehaviour
     private List<Vector3> vertices = new List<Vector3>(); // List of all the vertices for the mesh
     private List<int> triangles = new List<int>(); // List of all the triangles for the mesh (indexes of vertices to create triangles)
     private List<Vector2> uvs = new List<Vector2>(); // List of UV data for the mesh
+    private float width = 0.0f; // Width of the grid
+    private float height = 0.0f; // Height of the grid
+    private float halfSize = 0.5f; // Half size for a tile on the grid
 
     // Dictionary for quick UV changes
-    Dictionary<Vector2Int, int[]> tileUvIndices = new();
+    private Dictionary<Vector2Int, int[]> tileUvIndices = new();
+
+    // Dictionary for tracking tile atlas rect states
+    private Dictionary<Vector2Int, AtlasRect> tileCurrentRect = new();
 
     // Initialization function (Called automatically when script instantiates)
     private void Awake()
     {
         //Initialize
         mesh = new Mesh { name = "GridOverlay" }; // Create mesh with name GridOverlay
+        mesh.MarkDynamic(); // Mark the mesh as dynamic
         MeshFilter meshFilter = gameObject.AddComponent<MeshFilter>(); // Create mesh filter component on the parent game object
         MeshRenderer meshRenderer = gameObject.AddComponent<MeshRenderer>(); // Create mesh renderer component on the parent game object
         meshFilter.sharedMesh = mesh; // Configure the mesh filter
@@ -32,17 +39,23 @@ public class GridOverlay : MonoBehaviour
         Build(); // Build the grid
     }
 
+    // Override for default build function
+    private void Build() => Build(Atlas.Blank);
+
     // Builds the grid (Creates vertice/triangle/uv data and updates the grid mesh)
-    private void Build()
+    private void Build(AtlasRect defaultTileRect)
     {
         // Clear existing grid data
         vertices.Clear();
         triangles.Clear();
         uvs.Clear();
         tileUvIndices.Clear();
+        tileCurrentRect.Clear();
 
-        // Create temporary attributes
-        float halfSize = tileSize * 0.5f;
+        // Record grid width/height & half size
+        width = columns * tileSize;
+        height = rows * tileSize;
+        halfSize = tileSize * 0.5f;
 
         // Grid build loop
         for (int row = 0; row < rows; row++)
@@ -62,7 +75,7 @@ public class GridOverlay : MonoBehaviour
                 vertices.Add(tileCenter + new Vector3(-halfSize, 0.0f, halfSize)); // Top left
 
                 // Create default UV data for the grid tile
-                WriteQuadUVs(v0, Atlas.Blank);
+                WriteQuadUVs(v0, defaultTileRect);
 
                 // Create triangle / indicies data for the grid tile
                 // (flip winding so faces point upward)
@@ -81,6 +94,9 @@ public class GridOverlay : MonoBehaviour
                     v0 + 2, // Top right
                     v0 + 3  // Top left
                 };
+
+                // Record tile atlas rect state
+                tileCurrentRect[new Vector2Int(column, row)] = defaultTileRect;
             }
         }
 
@@ -126,13 +142,64 @@ public class GridOverlay : MonoBehaviour
         // Write the UV data for the specified tile so it displays the atlas rect
         WriteQuadUVs(idx[0], atlasRect);
 
+        // Record tile state
+        tileCurrentRect[tile] = atlasRect;
+
         // Push UV data to the grid mesh
         mesh.SetUVs(0, uvs);
     }
 
+    // Safe method for getting the current atlas rect for a given tile in the grid
+    public bool TryGetTileRect(Vector2Int tile, out AtlasRect rect)
+    {
+        // Try to get the current atlas rect for the given tile and return if true/false depending on whether successful
+        return tileCurrentRect.TryGetValue(tile, out rect);
+    }
+
+    // Safe method for getting a grid tile based on world position
+    public bool TryWorldToTile(Vector3 worldPosition, out Vector2Int tile)
+    {
+        // Transform world position to local position on the grid
+        Vector3 localPosition = transform.InverseTransformPoint(worldPosition);
+
+        // If the position is not within the bounds of the grid
+        if (localPosition.x < 0.0f || localPosition.z < 0.0f || localPosition.x >= width || localPosition.z >= height)
+        {
+            // Use default tile
+            tile = default;
+
+            // Failed to get the tile at world position
+            return false;
+        }
+
+        // Calculate the tile column and row
+        int tileColumn = Mathf.FloorToInt(localPosition.x / tileSize);
+        int tileRow = Mathf.FloorToInt(localPosition.z / tileSize);
+
+        // Get the tile
+        tile = new Vector2Int(tileColumn, tileRow);
+
+        // Successfully retrieved the tile at world position
+        return true;
+    }
+
+    // Returns the grid plane (Use for raycasts)
+    public Plane GetGridPlane()
+    {
+        // Return the grid plane
+        return new Plane(transform.up, transform.TransformPoint(new Vector3(0.0f, yOffset, 0.0f)));
+    }
+
+    // Returns the center position for the specified tile in world coordinates
+    public Vector3 GetTileCenterWorld(Vector2Int tile)
+    {
+        // Calculate and return the center position of the specified tile in world coordinates
+        return transform.TransformPoint(new Vector3(tile.x * tileSize + halfSize, yOffset, tile.y * tileSize + halfSize));
+    }
+
     // Named shortcuts
     public void SetBlank(Vector2Int tile) => SetTileRect(tile, Atlas.Blank);
-    public void SetHighlight(Vector2Int tile) => SetTileRect(tile, Atlas.Highlighted);
+    public void SetHighlighted(Vector2Int tile) => SetTileRect(tile, Atlas.Highlighted);
     public void SetSelected(Vector2Int tile) => SetTileRect(tile, Atlas.Selected);
     public void SetOccupied(Vector2Int tile) => SetTileRect(tile, Atlas.Occupied);
     public void SetEdgeTop(Vector2Int tile) => SetTileRect(tile, Atlas.EdgeTop);
